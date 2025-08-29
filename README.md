@@ -1,4 +1,4 @@
-# 🤖 Agente A2A con Memoria Persistente + Vertex AI Memory Bank
+# 🤖 Agente Conversacional Inteligente con Memoria Persistente
 
 Un agente conversacional inteligente construido con **Google ADK (Agent Development Kit)** que mantiene memoria persistente entre sesiones usando SQLite y **Vertex AI Memory Bank** para memoria avanzada en la nube.
 
@@ -26,7 +26,7 @@ Un agente conversacional inteligente construido con **Google ADK (Agent Developm
 ### 1. Clonar el repositorio
 ```bash
 git clone <tu-repositorio>
-cd "New a2aAgent with adk"
+cd ADK_memory
 ```
 
 ### 2. Crear entorno virtual
@@ -307,7 +307,7 @@ db_url = "sqlite:///./adk_sessions.db"
 
 ### Estructura del Proyecto
 ```
-New a2aAgent with adk/
+ADK_memory/
 ├── multi_tool_agent/
 │   ├── __init__.py              # Importaciones del módulo
 │   └── agent_simple.py          # Lógica principal del agente
@@ -319,6 +319,7 @@ New a2aAgent with adk/
 ├── .env                         # Variables de entorno
 ├── agent_sessions.db            # Base de datos personal (auto)
 ├── adk_sessions.db              # Base de datos ADK (auto)
+├── Info.txt                     # Análisis comparativo de sistemas
 └── README.md                    # Este archivo
 ```
 
