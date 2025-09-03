@@ -299,37 +299,3 @@ ADK_memory/
 ├── .env                         # Variables de entorno
 └── README.md                    # Este archivo
 ```
-
-## 🤝 Contribuir
-
-1. Fork el proyecto
-2. Crea una rama para tu feature (`git checkout -b feature/AmazingFeature`)
-3. Commit tus cambios (`git commit -m 'Add some AmazingFeature'`)
-4. Push a la rama (`git push origin feature/AmazingFeature`)
-5. Abre un Pull Request
-
-## 📄 Licencia
-
-Este proyecto está bajo la Licencia MIT. Ver `LICENSE` para más detalles.
-
-## 🆘 Soporte
-
-Si tienes problemas:
-
-1. **Revisa la sección de Solución de Problemas**
-2. **Verifica la configuración**: `python start_web.py --check`
-3. **Consulta los logs** del servidor para errores específicos
-4. **Abre un issue** en GitHub con detalles del error
-
-## 🎯 Roadmap
-
-- [ ] Soporte para más modelos de IA
-- [ ] Interfaz de administración web
-- [ ] Métricas y analytics
-- [ ] Integración con más servicios de Google Cloud
-- [ ] Soporte para múltiples idiomas
-- [ ] API GraphQL
-
----
-
-**¡Disfruta construyendo agentes inteligentes con memoria persistente!** 🚀
