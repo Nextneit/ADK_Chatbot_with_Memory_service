@@ -1,5 +1,17 @@
-google-adk[database]>=0.2.0
+# Core ADK dependencies
+google-adk[vertexai]>=0.2.0
+google-genai>=0.3.0
+
+# Web server
 fastapi>=0.104.0
 uvicorn>=0.24.0
+
+# Environment and utilities
 python-dotenv>=1.0.0
-google-genai>=0.3.0
+
+# Google Cloud (for Vertex AI)
+google-cloud-aiplatform>=1.38.0
+vertexai>=1.38.0
+
+# Database (for local agents)
+sqlite3  # Built-in with Python

@@ -6,6 +6,7 @@ Servidor FastAPI para el agente con memoria persistente.
 import os
 import asyncio
 import sys
+from datetime import datetime
 from typing import Dict, Any, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
@@ -16,7 +17,23 @@ from dotenv import load_dotenv
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Importar nuestros módulos
-from multi_tool_agent.agent_simple import persistent_memory, run_with_persistent_memory, get_memory_service_info
+# Solo importar el agente seleccionado para evitar logs innecesarios
+selected_agent = os.getenv('SELECTED_AGENT', 'database')
+
+if selected_agent == 'database':
+    from multi_tool_agent.agents.database_agent import DatabaseAgent
+    current_agent = DatabaseAgent()
+elif selected_agent == 'adk':
+    from multi_tool_agent.agents.adk_agent import ADKAgent
+    current_agent = ADKAgent()
+elif selected_agent == 'vertex':
+    from multi_tool_agent.agents.vertex_agent import VertexAgent
+    current_agent = VertexAgent()
+else:
+    from multi_tool_agent.agents.database_agent import DatabaseAgent
+    current_agent = DatabaseAgent()
+
+print(f"🤖 [SERVER] Agente seleccionado: {selected_agent.upper()}")
 
 # Cargar variables de entorno
 load_dotenv()
@@ -68,12 +85,14 @@ async def home():
             </div>
             
             <div class="memory-info">
+                <strong>🤖 Agente activo:</strong>
+                <div id="agent-status">Verificando...</div>
                 <strong>💾 Estado de la memoria:</strong>
                 <div id="memory-status">Verificando...</div>
             </div>
             
             <div class="input-group">
-                <input type="text" id="user-id" placeholder="Tu ID de usuario (ej: usuario123)" value="demo_user">
+                <input type="text" id="user-id" placeholder="Tu ID de usuario (ej: usuario123)" value="demo_user" onchange="clearSession()">
                 <button onclick="loadMemories()">🔍 Ver Memorias</button>
             </div>
             
@@ -98,13 +117,29 @@ async def home():
                 }
                 
                 try {
+                    // Cargar información del agente
+                    const healthResponse = await fetch('/health');
+                    const healthData = await healthResponse.json();
+                    document.getElementById('agent-status').innerHTML = 
+                        `${healthData.selected_agent.toUpperCase()} | ${healthData.agent_info.description}`;
+                    
+                    // Cargar información de memorias
                     const response = await fetch(`/memories/${userId}`);
                     const data = await response.json();
                     document.getElementById('memory-status').innerHTML = 
-                        `Usuario: ${userId} | Memorias: ${data.memories.length} | BD: ${data.db_status}`;
+                        `Usuario: ${userId} | Agente: ${data.agent_type.toUpperCase()} | ${data.db_status}`;
                 } catch (error) {
-                    document.getElementById('memory-status').innerHTML = 'Error al cargar memorias';
+                    document.getElementById('memory-status').innerHTML = 'Error al cargar información';
+                    document.getElementById('agent-status').innerHTML = 'Error al cargar agente';
                 }
+            }
+            
+            // Variable global para mantener session_id
+            let currentSessionId = null;
+            
+            function clearSession() {
+                currentSessionId = null;
+                console.log('Session ID limpiado - nueva sesión iniciada');
             }
             
             async function sendMessage() {
@@ -124,10 +159,20 @@ async def home():
                 const loadingDiv = addMessage('🤔 Pensando...', 'agent');
                 
                 try {
+                    const requestBody = { user_id: userId, message: message };
+                    
+                    // Incluir session_id si existe
+                    if (currentSessionId) {
+                        requestBody.session_id = currentSessionId;
+                        console.log('Enviando session_id:', currentSessionId);
+                    } else {
+                        console.log('No hay session_id guardado');
+                    }
+                    
                     const response = await fetch('/chat', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ user_id: userId, message: message })
+                        body: JSON.stringify(requestBody)
                     });
                     
                     const data = await response.json();
@@ -137,6 +182,12 @@ async def home():
                     
                     // Mostrar respuesta del agente
                     addMessage(data.response, 'agent');
+                    
+                    // Guardar session_id para futuras conversaciones
+                    if (data.session_id) {
+                        currentSessionId = data.session_id;
+                        console.log('Session ID guardado:', currentSessionId);
+                    }
                     
                     // Actualizar contador de memorias
                     document.getElementById('memory-status').innerHTML = 
@@ -172,81 +223,80 @@ async def home():
 async def chat_endpoint(message: ChatMessage):
     """Endpoint principal de chat con memoria persistente."""
     
+    # Debug: mostrar qué está recibiendo
+    print(f"🔍 [SERVER] Recibido - user_id: {message.user_id}, session_id: {message.session_id}")
+    
+    # Obtener el agente seleccionado
+    selected_agent = os.getenv('SELECTED_AGENT', 'database')
+    
     # Verificar API key
     api_key = os.getenv('GOOGLE_API_KEY')
     if not api_key:
         # Respuesta sin LLM - solo memoria persistente
         session_id = message.session_id or f"session_{message.user_id}_{int(asyncio.get_event_loop().time())}"
         
-        # Guardar mensaje en memoria
-        persistent_memory.log_conversation(message.user_id, session_id, "user", message.message)
-        
         fallback_response = f"📝 He guardado tu mensaje. (Nota: API key no configurada para respuestas del LLM)"
-        persistent_memory.log_conversation(message.user_id, session_id, "agent", fallback_response)
-        
-        memories = persistent_memory.get_memories(message.user_id)
         
         return ChatResponse(
             response=fallback_response,
             session_id=session_id,
             user_id=message.user_id,
-            memories_count=len(memories)
+            memories_count=0
         )
     
     try:
-        # Ejecutar agente con memoria persistente
-        response, session_id = await run_with_persistent_memory(
+        # Ejecutar el agente seleccionado
+        response, session_id = await current_agent.run(
             user_id=message.user_id,
             message=message.message,
             session_id=message.session_id
         )
         
-        # Contar memorias actuales
-        memories = persistent_memory.get_memories(message.user_id)
+        # Obtener información del agente actual
+        agent_info = {
+            "name": selected_agent.upper(),
+            "type": selected_agent,
+            "status": "active"
+        }
         
         return ChatResponse(
             response=response or "Lo siento, no pude generar una respuesta.",
             session_id=session_id,
             user_id=message.user_id,
-            memories_count=len(memories)
+            memories_count=len(agent_info.get('features', [])) if agent_info else 0
         )
         
     except Exception as e:
-        # En caso de error, al menos guardar el mensaje
+        # En caso de error, generar respuesta de fallback
         session_id = message.session_id or f"session_{message.user_id}_{int(asyncio.get_event_loop().time())}"
-        persistent_memory.log_conversation(message.user_id, session_id, "user", message.message)
         
-        error_response = f"⚠️ Error procesando mensaje, pero he guardado tu información. Error: {str(e)[:100]}"
-        persistent_memory.log_conversation(message.user_id, session_id, "agent", error_response)
-        
-        memories = persistent_memory.get_memories(message.user_id)
+        error_response = f"⚠️ Error procesando mensaje con agente {selected_agent}. Error: {str(e)[:100]}"
         
         return ChatResponse(
             response=error_response,
             session_id=session_id,
             user_id=message.user_id,
-            memories_count=len(memories)
+            memories_count=0
         )
 
 @app.get("/memories/{user_id}")
 async def get_memories(user_id: str):
     """Obtener todas las memorias de un usuario."""
     try:
-        memories = persistent_memory.get_memories(user_id)
-        
-        # Convertir a formato JSON-friendly
-        memory_list = []
-        for key, value, timestamp in memories:
-            memory_list.append({
-                "key": key,
-                "value": value,
-                "timestamp": timestamp
-            })
+        # Obtener información del agente actual
+        selected_agent = os.getenv('SELECTED_AGENT', 'database')
+        agent_info = {
+            "name": selected_agent.upper(),
+            "type": selected_agent,
+            "status": "active"
+        }
         
         return {
             "user_id": user_id,
-            "memories": memory_list,
-            "db_status": f"{os.path.getsize(persistent_memory.db_path)} bytes" if os.path.exists(persistent_memory.db_path) else "No existe"
+            "agent_type": selected_agent,
+            "agent_info": agent_info,
+            "memories": [],  # Las memorias se manejan internamente en cada agente
+            "db_status": f"Agente {selected_agent.upper()} activo"
         }
         
     except Exception as e:
@@ -256,83 +306,229 @@ async def get_memories(user_id: str):
 async def health_check():
     """Verificar estado del sistema."""
     api_key = os.getenv('GOOGLE_API_KEY')
-    db_exists = os.path.exists(persistent_memory.db_path)
+    selected_agent = os.getenv('SELECTED_AGENT', 'database')
     
-    # Obtener información del servicio de memoria (ADK + Vertex AI)
-    memory_info = get_memory_service_info()
+    # Obtener información del agente actual
+    agent_info = {
+        "name": selected_agent.upper(),
+        "type": selected_agent,
+        "status": "active"
+    }
     
     return {
         "status": "healthy",
         "api_key_configured": bool(api_key),
-        "database_exists": db_exists,
-        "database_path": persistent_memory.db_path,
-        "memory_service": memory_info["type"],
-        "memory_features": memory_info["features"],
-        "memory_status": memory_info["status"]
+        "selected_agent": selected_agent,
+        "agent_info": agent_info,
+        "available_agents": ["database", "adk", "vertex"]
     }
 
 @app.get("/debug/{user_id}")
 async def debug_memory(user_id: str):
-    """Debug detallado del sistema de memoria."""
+    """Debug detallado del sistema de memoria del agente activo."""
     
-    # 1. Verificar memoria SQLite
-    sqlite_memories = persistent_memory.get_memories(user_id)
+    # Obtener el agente activo
+    selected_agent = os.environ.get('SELECTED_AGENT', 'database')
+    agent = current_agent
     
-    # 2. Verificar base de datos directamente
-    import sqlite3
-    db_info = {}
-    if os.path.exists(persistent_memory.db_path):
-        conn = sqlite3.connect(persistent_memory.db_path)
-        
-        # Contar registros
-        cursor = conn.execute("SELECT COUNT(*) FROM user_memories WHERE user_id = ?", (user_id,))
-        memory_count = cursor.fetchone()[0]
-        
-        cursor = conn.execute("SELECT COUNT(*) FROM conversation_log WHERE user_id = ?", (user_id,))
-        conversation_count = cursor.fetchone()[0]
-        
-        # Obtener últimas 5 conversaciones
-        cursor = conn.execute("""
-            SELECT role, content, timestamp, session_id 
-            FROM conversation_log 
-            WHERE user_id = ? 
-            ORDER BY timestamp DESC 
-            LIMIT 5
-        """, (user_id,))
-        recent_conversations = cursor.fetchall()
-        
-        conn.close()
-        
-        db_info = {
-            "memory_count": memory_count,
-            "conversation_count": conversation_count,
-            "recent_conversations": [
-                {"role": row[0], "content": row[1][:100], "timestamp": row[2], "session_id": row[3]}
-                for row in recent_conversations
-            ]
-        }
+    if not agent:
+        return {"error": f"Agente '{selected_agent}' no disponible"}
     
-    # 3. Simular cómo ve las memorias el LLM
-    memories = persistent_memory.get_memories(user_id)
-    memory_context = ""
-    if memories:
-        memory_context = "\n--- MEMORIA PERSISTENTE ---\n"
-        for key, value, timestamp in memories:
-            memory_context += f"- {key}: {value} (guardado: {timestamp})\n"
-        memory_context += "--- FIN MEMORIA ---\n\n"
-    
-    # Obtener información del servicio de memoria ADK + Vertex AI
-    memory_info = get_memory_service_info()
-    
-    return {
-        "user_id": user_id,
-        "sqlite_memories": [{"key": m[0], "value": m[1], "timestamp": m[2]} for m in sqlite_memories],
-        "db_stats": db_info,
-        "memory_context_for_llm": memory_context,
-        "db_file_size": os.path.getsize(persistent_memory.db_path) if os.path.exists(persistent_memory.db_path) else 0,
-        "total_memories": len(sqlite_memories),
-        "memory_service_info": memory_info
+    # Obtener información del agente
+    agent_info = {
+        "name": selected_agent.upper(),
+        "type": selected_agent,
+        "status": "active"
     }
+    
+    # Información específica del agente
+    debug_info = {
+        "user_id": user_id,
+        "active_agent": selected_agent,
+        "agent_info": agent_info,
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    # Información específica según el tipo de agente
+    if selected_agent == "database":
+        # Para Database Agent, verificar la base de datos personalizada
+        import sqlite3
+        db_path = "database_agent_sessions.db"
+        
+        if os.path.exists(db_path):
+            conn = sqlite3.connect(db_path)
+            
+            # Contar registros en tablas personalizadas
+            try:
+                cursor = conn.execute("SELECT COUNT(*) FROM user_memories WHERE user_id = ?", (user_id,))
+                memory_count = cursor.fetchone()[0]
+            except:
+                memory_count = 0
+                
+            try:
+                cursor = conn.execute("SELECT COUNT(*) FROM conversation_log WHERE user_id = ?", (user_id,))
+                conversation_count = cursor.fetchone()[0]
+            except:
+                conversation_count = 0
+            
+            # Obtener últimas conversaciones
+            try:
+                cursor = conn.execute("""
+                    SELECT role, content, timestamp, session_id 
+                    FROM conversation_log 
+                    WHERE user_id = ? 
+                    ORDER BY timestamp DESC 
+                    LIMIT 5
+                """, (user_id,))
+                recent_conversations = cursor.fetchall()
+            except:
+                recent_conversations = []
+            
+            conn.close()
+            
+            debug_info.update({
+                "database_path": db_path,
+                "memory_count": memory_count,
+                "conversation_count": conversation_count,
+                "recent_conversations": [
+                    {"role": row[0], "content": row[1][:100], "timestamp": row[2], "session_id": row[3]}
+                    for row in recent_conversations
+                ],
+                "db_file_size": os.path.getsize(db_path) if os.path.exists(db_path) else 0
+            })
+        else:
+            debug_info["database_path"] = db_path
+            debug_info["status"] = "Base de datos no encontrada"
+    
+    elif selected_agent in ["adk", "vertex"]:
+        # Para ADK y Vertex agents, verificar la base de datos ADK
+        import sqlite3
+        db_path = f"{selected_agent}_agent_sessions.db"
+        
+        if os.path.exists(db_path):
+            conn = sqlite3.connect(db_path)
+            
+            # Verificar tablas ADK
+            try:
+                cursor = conn.execute("SELECT COUNT(*) FROM sessions WHERE user_id = ?", (user_id,))
+                session_count = cursor.fetchone()[0]
+            except:
+                session_count = 0
+                
+            try:
+                cursor = conn.execute("SELECT COUNT(*) FROM messages WHERE user_id = ?", (user_id,))
+                message_count = cursor.fetchone()[0]
+            except:
+                message_count = 0
+            
+            # Obtener últimas sesiones (usando esquema correcto ADK)
+            try:
+                cursor = conn.execute("""
+                    SELECT id, app_name, create_time 
+                    FROM sessions 
+                    WHERE user_id = ? 
+                    ORDER BY create_time DESC 
+                    LIMIT 5
+                """, (user_id,))
+                recent_sessions = cursor.fetchall()
+            except:
+                recent_sessions = []
+            
+            # Obtener mensajes recientes con contenido (usando esquema correcto ADK)
+            try:
+                cursor = conn.execute("""
+                    SELECT m.session_id, m.role, m.content, m.create_time, s.app_name
+                    FROM messages m
+                    LEFT JOIN sessions s ON m.session_id = s.id
+                    WHERE m.user_id = ? 
+                    ORDER BY m.create_time DESC 
+                    LIMIT 10
+                """, (user_id,))
+                recent_messages = cursor.fetchall()
+            except Exception as e:
+                recent_messages = []
+                debug_info["message_error"] = str(e)
+            
+            # Obtener mensajes por sesión (últimas 3 sesiones)
+            try:
+                cursor = conn.execute("""
+                    SELECT session_id, COUNT(*) as message_count
+                    FROM messages 
+                    WHERE user_id = ? 
+                    GROUP BY session_id 
+                    ORDER BY MAX(create_time) DESC 
+                    LIMIT 3
+                """, (user_id,))
+                sessions_with_counts = cursor.fetchall()
+                
+                # Para cada sesión, obtener los mensajes
+                session_messages = {}
+                for session_id, _ in sessions_with_counts:
+                    cursor = conn.execute("""
+                        SELECT role, content, create_time
+                        FROM messages 
+                        WHERE user_id = ? AND session_id = ?
+                        ORDER BY create_time ASC
+                    """, (user_id, session_id))
+                    session_messages[session_id] = [
+                        {"role": row[0], "content": row[1][:200], "timestamp": row[2]}
+                        for row in cursor.fetchall()
+                    ]
+            except Exception as e:
+                session_messages = {}
+                debug_info["session_messages_error"] = str(e)
+            
+            # Verificar si hay memoria almacenada (usando esquema correcto ADK)
+            try:
+                cursor = conn.execute("SELECT COUNT(*) FROM memory WHERE user_id = ?", (user_id,))
+                memory_count = cursor.fetchone()[0]
+                
+                # Obtener memoria reciente
+                cursor = conn.execute("""
+                    SELECT id, content, create_time
+                    FROM memory 
+                    WHERE user_id = ? 
+                    ORDER BY create_time DESC 
+                    LIMIT 5
+                """, (user_id,))
+                recent_memory = cursor.fetchall()
+            except:
+                memory_count = 0
+                recent_memory = []
+            
+            conn.close()
+            
+            debug_info.update({
+                "database_path": db_path,
+                "session_count": session_count,
+                "message_count": message_count,
+                "memory_count": memory_count,
+                "recent_sessions": [
+                    {"session_id": row[0], "app_name": row[1], "create_time": row[2]}
+                    for row in recent_sessions
+                ],
+                "recent_messages": [
+                    {
+                        "session_id": row[0], 
+                        "role": row[1], 
+                        "content": row[2][:300] + "..." if len(row[2]) > 300 else row[2],
+                        "create_time": row[3],
+                        "app_name": row[4]
+                    }
+                    for row in recent_messages
+                ],
+                "session_messages": session_messages,
+                "recent_memory": [
+                    {"id": row[0], "content": row[1][:200], "create_time": row[2]}
+                    for row in recent_memory
+                ],
+                "db_file_size": os.path.getsize(db_path) if os.path.exists(db_path) else 0
+            })
+        else:
+            debug_info["database_path"] = db_path
+            debug_info["status"] = "Base de datos no encontrada"
+    
+    return debug_info
 
 if __name__ == "__main__":
     import uvicorn
